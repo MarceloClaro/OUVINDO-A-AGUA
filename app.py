@@ -4,14 +4,16 @@
 Classificação de Sons de Água Vibrando em Copo de Vidro com Data Augmentation (Versão Streamlit)
 
 Fluxo:
-1. O usuário faz upload do arquivo ZIP contendo `dataset_agua` em subpastas com arquivos `.wav`.
-2. O código extrai o dataset e treina o modelo CNN com Data Augmentation.
+1. O usuário faz upload do arquivo ZIP contendo `dataset_agua` em subpastas com arquivos de áudio (.wav, .mp3, .m4a, .ogg).
+2. O código extrai o dataset, converte arquivos não-wav para wav usando ffmpeg, e treina o modelo CNN com Data Augmentation.
 3. Avalia o modelo, mostra matriz de confusão e relatório de classificação.
-4. Permite ao usuário fazer upload de um arquivo de áudio (`.wav` recomendado) para classificação,
-   gerando visualizações (waveform, FFT, STFT, MFCC).
+4. Permite ao usuário fazer upload de um arquivo de áudio (.wav, .mp3, .m4a, .ogg) para classificação,
+   convertendo-o para .wav se necessário, e gerando visualizações (waveform, FFT, STFT, MFCC).
 
-Observação:  
-Para evitar o erro `audioread.exceptions.NoBackendError` no Streamlit Cloud, use arquivos `.wav`.
+Requisitos:
+- ffmpeg instalado no ambiente
+- ffmpeg-python instalado
+- Caso não tenha ffmpeg, todos os arquivos devem ser .wav
 """
 
 import os
@@ -34,6 +36,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense, Dropout
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+import ffmpeg
 
 sns.set()
 
@@ -46,7 +49,8 @@ tf.random.set_seed(SEED)
 
 st.title("Classificação de Sons de Água Vibrando em Copo de Vidro")
 
-st.write("1. Faça upload do arquivo `.zip` contendo a pasta `dataset_agua` com as classes de áudio em formato `.wav`.")
+st.write("1. Faça upload do arquivo `.zip` contendo a pasta `dataset_agua` com as classes de áudio (.wav, .mp3, .m4a, .ogg). Será feita conversão automática para .wav se necessário.")
+
 dataset_zip = st.file_uploader("Upload do dataset (zip):", type="zip")
 
 temp_dir = "./temp_dataset"
@@ -60,9 +64,38 @@ augment = Compose([
     Shift(min_shift=-0.5, max_shift=0.5, p=0.5),
 ])
 
+def convert_to_wav(input_path):
+    # Converte arquivo não-wav para wav temporariamente
+    output_path = input_path + "_temp.wav"
+    try:
+        (
+            ffmpeg
+            .input(input_path)
+            .output(output_path, format='wav', acodec='pcm_s16le', ac=1, ar='22050')
+            .overwrite_output()
+            .run(quiet=True)
+        )
+        return output_path
+    except Exception as e:
+        st.error(f"Erro ao converter {input_path} para wav: {e}")
+        return None
+
 def load_audio_with_augmentation(file_path, sr=None, apply_augmentation=True):
-    # Recomendamos usar apenas .wav
+    # Verifica extensão
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in ['.wav']:
+        # Converter para wav
+        converted = convert_to_wav(file_path)
+        if converted is None:
+            raise Exception("Falha na conversão do arquivo para WAV.")
+        file_path = converted
+
     data, sr = librosa.load(file_path, sr=sr, res_type='kaiser_fast')
+
+    # Remove o arquivo temporário se houver
+    if ext not in ['.wav'] and os.path.exists(file_path):
+        os.remove(file_path)
+
     if apply_augmentation:
         data = augment(samples=data, sample_rate=sr)
     return data, sr
@@ -90,14 +123,16 @@ if dataset_zip is not None:
 
     st.write("Classes encontradas:", categories)
 
+    # Aceitar .wav, .mp3, .m4a, .ogg
+    valid_ext = ['.wav', '.mp3', '.m4a', '.ogg']
+
     file_paths = []
     labels = []
     for cat in categories:
         cat_path = os.path.join(base_path, cat)
-        # Recomendamos fortemente que os arquivos sejam .wav
-        files_in_cat = [f for f in os.listdir(cat_path) if f.lower().endswith('.wav')]
+        files_in_cat = [f for f in os.listdir(cat_path) if os.path.splitext(f)[1].lower() in valid_ext]
         if len(files_in_cat) == 0:
-            st.warning(f"Nenhum arquivo .wav encontrado na classe {cat}. Por favor, converta seus arquivos para .wav.")
+            st.warning(f"Nenhum arquivo de áudio compatível encontrado na classe {cat}. Use .wav, .mp3, .m4a, ou .ogg.")
         for file_name in files_in_cat:
             file_paths.append(os.path.join(cat_path, file_name))
             labels.append(cat)
@@ -107,7 +142,7 @@ if dataset_zip is not None:
     st.write(df.head())
 
     if len(df) == 0:
-        st.error("Não há amostras para treinamento. Verifique seu dataset ou converta seus áudios para .wav.")
+        st.error("Não há amostras para treinamento. Verifique seu dataset.")
         st.stop()
 
     augment_factor = 2
@@ -133,7 +168,7 @@ if dataset_zip is not None:
                             extracted_features.append(aug_feature)
                             final_labels.append(label)
             except Exception as e:
-                st.error(f"Erro ao carregar o áudio. Certifique-se de usar .wav. Detalhes: {e}")
+                st.error(f"Erro ao carregar/converter o áudio: {e}")
                 st.stop()
 
         X = np.array(extracted_features)
@@ -222,7 +257,7 @@ else:
     st.info("Após enviar o dataset .zip, clique em 'Treinar Modelo' para iniciar o processo.")
 
 st.header("Classificar Novo Áudio")
-uploaded_file = st.file_uploader("Envie um arquivo de áudio .wav para classificar:", type=["wav"])
+uploaded_file = st.file_uploader("Envie um arquivo de áudio para classificar (wav, mp3, m4a, ogg):", type=["wav","mp3","m4a","ogg"])
 
 plot_waveform_flag = st.checkbox("Mostrar Waveform", value=True)
 plot_frequency_flag = st.checkbox("Mostrar Espectro de Frequências (FFT)", value=True)
@@ -233,11 +268,33 @@ if uploaded_file is not None and 'model' in st.session_state and 'labelencoder' 
     model = st.session_state.model
     labelencoder = st.session_state.labelencoder
 
+    # Salvamos o arquivo temporariamente
+    input_audio_path = "temp_upload_audio"
+    with open(input_audio_path, 'wb') as f:
+        f.write(uploaded_file.read())
+
+    # Converter se não for wav
+    ext = os.path.splitext(input_audio_path)[1].lower()
+    if ext not in ['.wav']:
+        converted = convert_to_wav(input_audio_path)
+        if converted is None:
+            st.error("Falha ao converter o arquivo para WAV.")
+            os.remove(input_audio_path)
+            st.stop()
+        os.remove(input_audio_path)
+        input_audio_path = converted
+
     try:
-        data, sr = librosa.load(uploaded_file, sr=None, res_type='kaiser_fast')
+        data, sr = librosa.load(input_audio_path, sr=None, res_type='kaiser_fast')
     except Exception as e:
-        st.error(f"Erro ao carregar o áudio. Use um arquivo .wav. Detalhes: {e}")
+        st.error(f"Erro ao carregar o áudio. Detalhes: {e}")
+        if os.path.exists(input_audio_path):
+            os.remove(input_audio_path)
         st.stop()
+
+    # Deleta o arquivo temporário
+    if os.path.exists(input_audio_path):
+        os.remove(input_audio_path)
 
     mfccs = librosa.feature.mfcc(y=data, sr=sr, n_mfcc=40)
     mfccs_scaled = np.mean(mfccs.T, axis=0)
@@ -311,3 +368,4 @@ elif uploaded_file is not None:
     st.warning("O modelo ainda não foi treinado. Treine o modelo antes de fazer previsões.")
 
 st.write("Para melhor desempenho, considere usar datasets maiores, validação cruzada e ajuste de hiperparâmetros.")
+
