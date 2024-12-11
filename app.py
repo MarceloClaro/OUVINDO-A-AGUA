@@ -4,11 +4,14 @@
 Classificação de Sons de Água Vibrando em Copo de Vidro com Data Augmentation (Versão Streamlit)
 
 Fluxo:
-1. O usuário faz upload do arquivo ZIP contendo `dataset_agua`.
+1. O usuário faz upload do arquivo ZIP contendo `dataset_agua` em subpastas com arquivos `.wav`.
 2. O código extrai o dataset e treina o modelo CNN com Data Augmentation.
 3. Avalia o modelo, mostra matriz de confusão e relatório de classificação.
-4. Permite ao usuário fazer upload de um arquivo de áudio (MP3, M4A, WAV) para classificação,
+4. Permite ao usuário fazer upload de um arquivo de áudio (`.wav` recomendado) para classificação,
    gerando visualizações (waveform, FFT, STFT, MFCC).
+
+Observação:  
+Para evitar o erro `audioread.exceptions.NoBackendError` no Streamlit Cloud, use arquivos `.wav`.
 """
 
 import os
@@ -43,15 +46,33 @@ tf.random.set_seed(SEED)
 
 st.title("Classificação de Sons de Água Vibrando em Copo de Vidro")
 
-st.write("1. Faça upload do arquivo `.zip` contendo a pasta `dataset_agua` com as classes de áudio.")
+st.write("1. Faça upload do arquivo `.zip` contendo a pasta `dataset_agua` com as classes de áudio em formato `.wav`.")
 dataset_zip = st.file_uploader("Upload do dataset (zip):", type="zip")
 
 temp_dir = "./temp_dataset"
 if not os.path.exists(temp_dir):
     os.makedirs(temp_dir, exist_ok=True)
 
+augment = Compose([
+    AddGaussianNoise(min_amplitude=0.001, max_amplitude=0.015, p=0.5),
+    TimeStretch(min_rate=0.8, max_rate=1.25, p=0.5),
+    PitchShift(min_semitones=-4, max_semitones=4, p=0.5),
+    Shift(min_shift=-0.5, max_shift=0.5, p=0.5),
+])
+
+def load_audio_with_augmentation(file_path, sr=None, apply_augmentation=True):
+    # Recomendamos usar apenas .wav
+    data, sr = librosa.load(file_path, sr=sr, res_type='kaiser_fast')
+    if apply_augmentation:
+        data = augment(samples=data, sample_rate=sr)
+    return data, sr
+
+def extract_features(data, sr):
+    mfccs = librosa.feature.mfcc(y=data, sr=sr, n_mfcc=40)
+    mfccs_scaled = np.mean(mfccs.T, axis=0)
+    return mfccs_scaled
+
 if dataset_zip is not None:
-    # Extrair o zip em uma pasta temporária
     with zipfile.ZipFile(dataset_zip, 'r') as zip_ref:
         zip_ref.extractall(temp_dir)
 
@@ -69,31 +90,14 @@ if dataset_zip is not None:
 
     st.write("Classes encontradas:", categories)
 
-    augment = Compose([
-        AddGaussianNoise(min_amplitude=0.001, max_amplitude=0.015, p=0.5),
-        TimeStretch(min_rate=0.8, max_rate=1.25, p=0.5),
-        PitchShift(min_semitones=-4, max_semitones=4, p=0.5),
-        Shift(min_shift=-0.5, max_shift=0.5, p=0.5),
-    ])
-
-    def load_audio_with_augmentation(file_path, sr=None, apply_augmentation=True):
-        data, sr = librosa.load(file_path, sr=sr, res_type='kaiser_fast')
-        if apply_augmentation:
-            data = augment(samples=data, sample_rate=sr)
-        return data, sr
-
-    def extract_features(data, sr):
-        mfccs = librosa.feature.mfcc(y=data, sr=sr, n_mfcc=40)
-        mfccs_scaled = np.mean(mfccs.T, axis=0)
-        return mfccs_scaled
-
     file_paths = []
     labels = []
     for cat in categories:
         cat_path = os.path.join(base_path, cat)
-        files_in_cat = [f for f in os.listdir(cat_path) if f.lower().endswith(('.mp3', '.m4a', '.wav'))]
+        # Recomendamos fortemente que os arquivos sejam .wav
+        files_in_cat = [f for f in os.listdir(cat_path) if f.lower().endswith('.wav')]
         if len(files_in_cat) == 0:
-            st.warning(f"Nenhum arquivo de áudio encontrado na classe {cat}.")
+            st.warning(f"Nenhum arquivo .wav encontrado na classe {cat}. Por favor, converta seus arquivos para .wav.")
         for file_name in files_in_cat:
             file_paths.append(os.path.join(cat_path, file_name))
             labels.append(cat)
@@ -103,7 +107,7 @@ if dataset_zip is not None:
     st.write(df.head())
 
     if len(df) == 0:
-        st.error("Não há amostras para treinamento. Verifique seu dataset.")
+        st.error("Não há amostras para treinamento. Verifique seu dataset ou converta seus áudios para .wav.")
         st.stop()
 
     augment_factor = 2
@@ -113,20 +117,24 @@ if dataset_zip is not None:
         with st.spinner("Extraindo features e aplicando Data Augmentation..."):
             extracted_features = []
             final_labels = []
-            for i in range(len(df)):
-                file = df['file_path'].iloc[i]
-                label = df['class'].iloc[i]
-                data, sr = load_audio_with_augmentation(file, sr=None, apply_augmentation=False)
-                original_feature = extract_features(data, sr)
-                extracted_features.append(original_feature)
-                final_labels.append(label)
+            try:
+                for i in range(len(df)):
+                    file = df['file_path'].iloc[i]
+                    label = df['class'].iloc[i]
+                    data, sr = load_audio_with_augmentation(file, sr=None, apply_augmentation=False)
+                    original_feature = extract_features(data, sr)
+                    extracted_features.append(original_feature)
+                    final_labels.append(label)
 
-                if apply_augmentation:
-                    for _ in range(augment_factor):
-                        aug_data, sr = load_audio_with_augmentation(file, sr=None, apply_augmentation=True)
-                        aug_feature = extract_features(aug_data, sr)
-                        extracted_features.append(aug_feature)
-                        final_labels.append(label)
+                    if apply_augmentation:
+                        for _ in range(augment_factor):
+                            aug_data, sr = load_audio_with_augmentation(file, sr=None, apply_augmentation=True)
+                            aug_feature = extract_features(aug_data, sr)
+                            extracted_features.append(aug_feature)
+                            final_labels.append(label)
+            except Exception as e:
+                st.error(f"Erro ao carregar o áudio. Certifique-se de usar .wav. Detalhes: {e}")
+                st.stop()
 
         X = np.array(extracted_features)
         y = np.array(final_labels)
@@ -206,7 +214,6 @@ if dataset_zip is not None:
                                       target_names=labelencoder.classes_, zero_division=0)
         st.text(report)
 
-        # Guardar no session_state
         st.session_state.model = model
         st.session_state.labelencoder = labelencoder
         st.session_state.sr = sr
@@ -214,11 +221,8 @@ if dataset_zip is not None:
 else:
     st.info("Após enviar o dataset .zip, clique em 'Treinar Modelo' para iniciar o processo.")
 
-
-# ==================== VISUALIZAÇÕES E PREVISÕES COM ARQUIVO UPLOAD ====================
 st.header("Classificar Novo Áudio")
-
-uploaded_file = st.file_uploader("Envie um arquivo de áudio para classificar (MP3, M4A, WAV):", type=["mp3", "m4a", "wav"])
+uploaded_file = st.file_uploader("Envie um arquivo de áudio .wav para classificar:", type=["wav"])
 
 plot_waveform_flag = st.checkbox("Mostrar Waveform", value=True)
 plot_frequency_flag = st.checkbox("Mostrar Espectro de Frequências (FFT)", value=True)
@@ -229,7 +233,12 @@ if uploaded_file is not None and 'model' in st.session_state and 'labelencoder' 
     model = st.session_state.model
     labelencoder = st.session_state.labelencoder
 
-    data, sr = librosa.load(uploaded_file, sr=None, res_type='kaiser_fast')
+    try:
+        data, sr = librosa.load(uploaded_file, sr=None, res_type='kaiser_fast')
+    except Exception as e:
+        st.error(f"Erro ao carregar o áudio. Use um arquivo .wav. Detalhes: {e}")
+        st.stop()
+
     mfccs = librosa.feature.mfcc(y=data, sr=sr, n_mfcc=40)
     mfccs_scaled = np.mean(mfccs.T, axis=0)
     mfccs_scaled = mfccs_scaled.reshape(1,-1)
@@ -282,7 +291,6 @@ if uploaded_file is not None and 'model' in st.session_state and 'labelencoder' 
         plt.colorbar(mappable=mappable, ax=ax, format='%+2.f dB')
         return fig
 
-    # Visualizações
     if plot_waveform_flag:
         fig = plot_waveform_func(data, sr, title=f"Waveform - {pred_label[0]}")
         st.pyplot(fig)
