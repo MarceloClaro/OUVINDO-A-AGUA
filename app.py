@@ -4,13 +4,16 @@
 Classificação de Sons de Água Vibrando em Copo de Vidro com Data Augmentation (Versão Streamlit)
 
 Fluxo:
-1. O usuário faz upload do arquivo ZIP contendo `dataset_agua`.
-2. O código extrai o dataset e treina o modelo CNN com Data Augmentation.
-3. Avalia o modelo, mostra matriz de confusão e relatório de classificação.
-4. Permite ao usuário fazer upload de um arquivo de áudio (`.wav`, `.m4a`, `.ogg`, `.mp3`) para classificação,
-   gerando visualizações (waveform, FFT, STFT, MFCC).
+1. O usuário faz upload do arquivo ZIP contendo `dataset_agua` com arquivos `.wav`, `.m4a`, `.ogg` ou `.mp3`.
+2. O código extrai o dataset, converte todos os arquivos para `.wav` antes de extrair as features.
+3. Treina um modelo CNN com Data Augmentation.
+4. Avalia o modelo, mostra métricas, matriz de confusão e relatório de classificação.
+5. Permite ao usuário fazer upload de um arquivo de áudio (`.wav`, `.m4a`, `.ogg`, `.mp3`), converte para `.wav`,
+   extrai features e classifica, exibindo visualizações (waveform, FFT, STFT, MFCC).
 
-Caso o carregamento do áudio falhe diretamente pelo `librosa`, o código tentará converter o áudio para `.wav` usando `ffmpeg`.
+Requisitos:
+- ffmpeg instalado no sistema
+- Dependências no requirements.txt
 """
 
 import os
@@ -62,32 +65,29 @@ augment = Compose([
     Shift(min_shift=-0.5, max_shift=0.5, p=0.5),
 ])
 
-def load_audio_any_format(file_path, sr=None):
+def convert_to_wav(input_path, output_path):
     """
-    Tenta carregar o arquivo de áudio com librosa.
-    Se falhar (NoBackendError), usa ffmpeg para converter para WAV em memória e depois carrega com soundfile.
+    Converte qualquer arquivo de áudio suportado pelo ffmpeg em WAV PCM 16-bit
     """
-    try:
-        data, sr = librosa.load(file_path, sr=sr, res_type='kaiser_fast')
-        return data, sr
-    except Exception as e:
-        # Tenta fallback com ffmpeg
-        try:
-            # Converte usando ffmpeg para WAV em memória
-            out, err = (
-                ffmpeg
-                .input(file_path)
-                .output('pipe:', format='wav', acodec='pcm_s16le')
-                .run(capture_stdout=True, capture_stderr=True)
-            )
-            data, sr = sf.read(BytesIO(out))
-            return data, sr
-        except Exception as e2:
-            # Se ainda falhar, levanta erro
-            raise RuntimeError(f"Falha ao carregar áudio: {e2}")
+    (
+        ffmpeg
+        .input(input_path)
+        .output(output_path, format='wav', acodec='pcm_s16le', ar='44100', ac='1')
+        .overwrite_output()
+        .run(quiet=True)
+    )
+
+def load_audio_wav(file_path, sr=None):
+    # Carrega diretamente o WAV
+    data, sr = librosa.load(file_path, sr=sr, res_type='kaiser_fast')
+    return data, sr
 
 def load_audio_with_augmentation(file_path, sr=None, apply_augmentation=True):
-    data, sr = load_audio_any_format(file_path, sr=sr)
+    # Converte antes para WAV
+    wav_path = file_path + ".temp.wav"
+    convert_to_wav(file_path, wav_path)
+    data, sr = load_audio_wav(wav_path, sr=sr)
+    os.remove(wav_path)
     if apply_augmentation:
         data = augment(samples=data, sample_rate=sr)
     return data, sr
@@ -261,14 +261,15 @@ if uploaded_file is not None and 'model' in st.session_state and 'labelencoder' 
     model = st.session_state.model
     labelencoder = st.session_state.labelencoder
 
-    try:
-        # Salva o arquivo enviado temporariamente
-        with open("temp_input_audio", "wb") as f:
-            f.write(uploaded_file.read())
-        data, sr = load_audio_any_format("temp_input_audio", sr=None)
-    except Exception as e:
-        st.error(f"Erro ao carregar o áudio: {e}")
-        st.stop()
+    # Salva o arquivo enviado
+    with open("temp_input_audio", "wb") as f:
+        f.write(uploaded_file.read())
+
+    # Converte para WAV antes de carregar
+    convert_to_wav("temp_input_audio", "temp_input_audio_converted.wav")
+    data, sr = load_audio_wav("temp_input_audio_converted.wav", sr=None)
+    os.remove("temp_input_audio")
+    os.remove("temp_input_audio_converted.wav")
 
     mfccs = librosa.feature.mfcc(y=data, sr=sr, n_mfcc=40)
     mfccs_scaled = np.mean(mfccs.T, axis=0)
