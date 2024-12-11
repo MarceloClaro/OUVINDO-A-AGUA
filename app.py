@@ -1,24 +1,34 @@
 # app.py
 # -*- coding: utf-8 -*-
+
 """
 Classificação de Sons de Água Vibrando em Copo de Vidro com Data Augmentation (Versão Streamlit)
 
 Fluxo:
-1. O usuário faz upload do arquivo ZIP contendo `dataset_agua` com arquivos `.wav`, `.m4a`, `.ogg` ou `.mp3`.
-2. O código extrai o dataset, converte todos os arquivos para `.wav` antes de extrair as features.
-3. Treina um modelo CNN com Data Augmentation.
-4. Avalia o modelo, mostra métricas, matriz de confusão e relatório de classificação.
-5. Permite ao usuário fazer upload de um arquivo de áudio (`.wav`, `.m4a`, `.ogg`, `.mp3`), converte para `.wav`,
-   extrai features e classifica, exibindo visualizações (waveform, FFT, STFT, MFCC).
+1. O usuário faz upload do arquivo ZIP contendo a pasta `dataset_agua`.
+2. O código extrai o dataset e treina o modelo CNN com Data Augmentation.
+3. Avalia o modelo, mostra matriz de confusão e relatório de classificação.
+4. Permite ao usuário fazer upload de um arquivo de áudio (`.wav`, `.m4a`, `.ogg`, `.mp3`) para classificação,
+   gerando visualizações (waveform, FFT, STFT, MFCC).
 
-Requisitos:
-- ffmpeg instalado no sistema
-- Dependências no requirements.txt
+Ajustes e correções:
+- Converte qualquer arquivo para `.wav` antes de extrair as features usando `ffmpeg`, garantindo compatibilidade.
+- Suprime avisos do TensorFlow.
+- Ignora aviso de "invalid escape sequence" do audiomentations.
+- Necessário ter `ffmpeg` instalado no sistema.
 """
 
 import os
 import random
 import io
+import warnings
+
+# Suprime avisos informativos do TensorFlow
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+# Ignora o aviso sobre "invalid escape sequence"
+warnings.filterwarnings("ignore", message="invalid escape sequence")
+
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -67,7 +77,7 @@ augment = Compose([
 
 def convert_to_wav(input_path, output_path):
     """
-    Converte qualquer arquivo de áudio suportado pelo ffmpeg em WAV PCM 16-bit
+    Converte qualquer arquivo de áudio suportado pelo ffmpeg em WAV PCM 16-bit 44.1kHz mono.
     """
     (
         ffmpeg
@@ -78,12 +88,16 @@ def convert_to_wav(input_path, output_path):
     )
 
 def load_audio_wav(file_path, sr=None):
-    # Carrega diretamente o WAV
+    """
+    Carrega diretamente um arquivo WAV usando librosa.
+    """
     data, sr = librosa.load(file_path, sr=sr, res_type='kaiser_fast')
     return data, sr
 
 def load_audio_with_augmentation(file_path, sr=None, apply_augmentation=True):
-    # Converte antes para WAV
+    """
+    Converte o arquivo de áudio para WAV, carrega, e aplica augmentation se necessário.
+    """
     wav_path = file_path + ".temp.wav"
     convert_to_wav(file_path, wav_path)
     data, sr = load_audio_wav(wav_path, sr=sr)
@@ -249,7 +263,6 @@ else:
 
 st.header("Classificar Novo Áudio")
 
-# Aceita arquivos: .wav, .m4a, .ogg, .mp3
 uploaded_file = st.file_uploader("Envie um arquivo de áudio para classificar:", type=["wav", "m4a", "ogg", "mp3"])
 
 plot_waveform_flag = st.checkbox("Mostrar Waveform", value=True)
