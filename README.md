@@ -42,10 +42,10 @@ Instruções para Execução (via Streamlit)
 ----------------------------------------
 Referências:
 [1] Logan, B. (2000). Mel Frequency Cepstral Coefficients for Music Modeling. In ISMIR.
+
 [2] Piczak, K.J. (2015). ESC: Dataset for Environmental Sound Classification. In ACM Multimedia.
+
 [3] Salamon, J. & Bello, J.P. (2017). Deep Convolutional Neural Networks and Data Augmentation for Environmental Sound Classification. IEEE Signal Processing Letters.
 
 ----------------------------------------
 
-Este README fornece uma visão geral do projeto, instruções de uso e referências.
-```
